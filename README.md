@@ -1,6 +1,8 @@
 # loxone_mqttsn
 MQTT-SN client for Loxone.
 
+This is a fork from [sebastienfouss/loxone_mqttsn](https://github.com/sebastienfouss/loxone_mqttsn) with improved subscriber code robustness and wildcard topic subscription implementation.
+
 MQTT-SN specifications available [here](https://www.oasis-open.org/committees/download.php/66091/MQTT-SN_spec_v1.2.pdf).
 
 ### Disclaimers
