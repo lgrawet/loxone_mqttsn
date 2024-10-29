@@ -35,9 +35,11 @@
 
 // Topics vars
 int gRegisteredTopics = 0;
-int force_reconnect = 0;
 char *gTopics[MAX_TOPICS];
 int gTopicsIDs[MAX_TOPICS];
+
+// Reconnection needed?
+int force_reconnect = 0;
 
 // Prepare stream to publish data received from MQTT-SN GW
 STREAM *pLoxoneInStream, *pLoxoneOutStream;
@@ -133,7 +135,8 @@ int getTopicID (char *topic) {
 // Keepalive function
 int keepalive() {
 
-	char szBuffer[3], szBufferIn[BUFF_SIZE];
+	char szBuffer[3];
+	char *message;
 	int nCnt;
 	szBuffer[0] = 0x02; // Length
 	szBuffer[1] = MQTTSN_TYPE_PINGREQ; // Ping
@@ -142,11 +145,11 @@ int keepalive() {
 	stream_write (pMQTTSNStream, szBuffer, 2);
 	stream_flush (pMQTTSNStream);
 	// Wait for answer
-	nCnt = stream_read(pMQTTSNStream,szBufferIn,BUFF_SIZE,MQTTSN_GW_TIMEOUT*1000);
-	if (nCnt == 0)
+	message = processReceivedMessage(MQTTSN_TYPE_PINGRESP);
+	// Return error if no response to ping
+	if (message == NULL)
 		return -1;
 	return 1;
-
 }
 
 // Connect function
@@ -242,7 +245,6 @@ void publish_heartbeat() {
 
    stream_write (pMQTTSNStream, szBuffer, szBuffer[0]); // write to output buffer
    stream_flush (pMQTTSNStream);
-
 }
 
 // Process publish message received from MQTT-SN gateway
@@ -328,7 +330,7 @@ char * processReceivedMessage(int msgType) {
 
 	ct = getcurrenttime();
 
-	while (1) {
+	while (force_reconnect == 0) {
 		// Process data received from MQTT-SN gateway (should be Publish messages)
 		// If no data received for 25 seconds, send a keepalive
 		// If keepalive fails, restart connection
@@ -349,10 +351,8 @@ char * processReceivedMessage(int msgType) {
 			if (szBufferIn[0] == 0x01)
 				l = 2; // length encoded on 3 bytes
 
-			// Skip PINGRESP (not expected but can happen)
 			switch (szBufferIn[1+l]) {
 				case MQTTSN_TYPE_PINGRESP:
-					// Do nothing
 					break;
 				case MQTTSN_TYPE_PUBLISH:
 					processPublishMessage (nCnt, szBufferIn);
@@ -367,7 +367,7 @@ char * processReceivedMessage(int msgType) {
 				case MQTTSN_TYPE_REGACK:
 					break;
 				default:
-					sprintf (status, "Unexpected message: %d %d %d", _message[0+l],_message[1+l],_message[2+l]);
+					sprintf (status, "Unexpected message: %d %d %d", szBufferIn[0+l], szBufferIn[1+l], szBufferIn[2+l]);
 					setoutputtext(1, status);
 					break;
 			}
@@ -375,6 +375,9 @@ char * processReceivedMessage(int msgType) {
 			if (szBufferIn[1+l] == msgType)
 				return &szBufferIn[0];
 		} else {
+			// Return immediately when no response to ping
+			if (msgType == MQTTSN_TYPE_PINGRESP)
+				return NULL;
 			setoutputtext (2, "KEEPALIVE");
 			if (keepalive() == 1) {
 				// Keep alive ok
@@ -384,7 +387,6 @@ char * processReceivedMessage(int msgType) {
 				// Connection dead, reconnect
 				setoutputtext(0,"CONNECTION DEAD");
 				force_reconnect = 1;
-				break;
 			}
 		}
 	}
@@ -473,13 +475,14 @@ while (1) {
 			break;
 		}
 	}
+	sleep (50);
 
 	while (force_reconnect == 0) {
 		// Process all subscription requests
 		while (1) {
 			nCnt = stream_read(pLoxoneInStream,szBufferIn,BUFF_SIZE,5000);
 			if (nCnt > 0) {
-				szBufferIn[nCnt] = 0;
+				szBufferIn[nCnt] = '\0';
 				processSubscriptionRequest(nCnt, szBufferIn);
                 sleep (10);
 			} else {
@@ -487,8 +490,6 @@ while (1) {
 			}
 		}
 		sleep (50);
-		while (1) {
-			processReceivedMessage(MQTTSN_TYPE_PUBLISH);
-		}
+		processReceivedMessage(MQTTSN_TYPE_PUBLISH);
 	}
 }
