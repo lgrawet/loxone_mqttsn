@@ -497,19 +497,20 @@ while (1) {
 		}
 	}
 
-	while (force_reconnect == 0) {
-		// Process all subscription requests
-		while (1) {
-			nCnt = stream_read(pLoxoneInStream,szBufferIn,BUFF_SIZE,5000);
-			if (nCnt > 0) {
-				szBufferIn[nCnt] = '\0';
-				processSubscriptionRequest(nCnt, szBufferIn);
-                sleep (10);
-			} else {
-				break;
-			}
+	// Process all subscription requests
+	while (1) {
+		nCnt = stream_read(pLoxoneInStream,szBufferIn,BUFF_SIZE,5000);
+		if (nCnt > 0) {
+			szBufferIn[nCnt] = '\0';
+			processSubscriptionRequest(nCnt, szBufferIn);
+			sleep (10);
+		} else {
+			break;
 		}
-		sleep (50);
+	}
+	sleep (50);
+
+	while (force_reconnect == 0) {
 		processReceivedMessage(MQTTSN_TYPE_PUBLISH);
 	}
 }
