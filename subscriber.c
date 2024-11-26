@@ -31,7 +31,7 @@
 
 // Sizing
 #define MAX_TOPICS 50
-#define MAX_TOPIC_SIZE 50
+#define MAX_TOPIC_SIZE 120
 
 // Topics vars
 int gRegisteredTopics = 0;
@@ -95,6 +95,7 @@ int getTopicID (char *topic) {
 	char szBuffer[BUFF_SIZE], szBufferIn[BUFF_SIZE];
 	int nCnt;
 	int i;
+	int l;
 	int topicID;
 	char status[300];
 
@@ -121,13 +122,19 @@ int getTopicID (char *topic) {
 
 	// Wait for answer
 	szBufferIn = processReceivedMessage(MQTTSN_TYPE_REGACK);
-	if (szBufferIn[6]) {
+
+	// Length can be encoded on 1 or 3 bytes
+	l = 0;
+	if (szBufferIn[0] == 0x01)
+	  l = 2; // length encoded on 3 bytes
+
+	if (szBufferIn[6+l]) {
 		// Return code != 0, topic not registered
 		return -1;
 	}
 
 	// OK, topic registered on MQTT-SN Gateway
-	topicID = (szBufferIn[2] << 8) + szBufferIn[3];
+	topicID = (szBufferIn[2+l] << 8) + szBufferIn[3+l];
 	registerTopic(topicID, topic);
 	return topicID;
 }
@@ -222,6 +229,7 @@ int disconnect() {
 void publish_heartbeat() {
 
    int i;
+   int l;
    char payload[2];
    char szBuffer[BUFF_SIZE];
    int topicID;
@@ -288,13 +296,19 @@ int processRegisterMessage(int nCnt, char *_message) {
 	int topicID;
 	int msgID;
 	int i;
+	int l;
 	char topic[MAX_TOPIC_SIZE];
 	char szBuffer[BUFF_SIZE];
 	char status[200];
 
-	topicID = (_message[2] << 8) + _message[3];
-    msgID = (_message[4] << 8) + _message[5];
-	strncpy (topic, &_message[6], nCnt-6);
+	// Length can be encoded on 1 or 3 bytes
+	l = 0;
+	if (szBufferIn[0] == 0x01)
+		l = 2; // length encoded on 3 bytes
+
+	topicID = (_message[2+l] << 8) + _message[3+l];
+    msgID = (_message[4+l] << 8) + _message[5+l];
+	strncpy (topic, &_message[6+l], nCnt-6-l);
 
 	// Check if topic is registered
 	if (!checkRegisteredTopic(topic)) {
@@ -397,6 +411,7 @@ char * processReceivedMessage(int msgType) {
 int processSubscriptionRequest(int nCnt, char *message) {
 
 	int i;
+	int l;
 	char* pos;
 	char topic[MAX_TOPIC_SIZE];
 	char payload[200];
@@ -427,13 +442,19 @@ int processSubscriptionRequest(int nCnt, char *message) {
 
 	// Wait for answer
 	szBufferIn = processReceivedMessage(MQTTSN_TYPE_SUBACK);
-	if (szBufferIn[7]) {
+
+	// Length can be encoded on 1 or 3 bytes
+	l = 0;
+	if (szBufferIn[0] == 0x01)
+	  l = 2; // length encoded on 3 bytes
+
+	if (szBufferIn[7+l]) {
 		// Return code != 0, topic not subscribed
 		return -1;
 	}
 	else {
 		// OK, topic subscribed on MQTT-SN Gateway
-		topicID = (szBufferIn[3] << 8) + szBufferIn[4];
+		topicID = (szBufferIn[3+l] << 8) + szBufferIn[4+l];
 	}
 
 	if (topicID) {
@@ -475,7 +496,6 @@ while (1) {
 			break;
 		}
 	}
-	sleep (50);
 
 	while (force_reconnect == 0) {
 		// Process all subscription requests
