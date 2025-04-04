@@ -338,7 +338,7 @@ int processRegisterMessage(int nCnt, char *_message) {
 char * processReceivedMessage(int msgType) {
 	int ct, ct2;
 	int l;
-    int nct;
+	int nCnt;
 	char szBufferIn[BUFF_SIZE];
 	char status[300];
 
