@@ -13,6 +13,7 @@
 
 // Message type
 #define MQTTSN_TYPE_CONNECT       (0x04)
+#define MQTTSN_TYPE_CONNACK       (0x05)
 #define MQTTSN_TYPE_REGISTER      (0x0A)
 #define MQTTSN_TYPE_REGACK        (0x0B)
 #define MQTTSN_TYPE_PUBLISH       (0x0C)
@@ -30,13 +31,21 @@
 #define BUFF_SIZE 1000
 
 // Sizing
-#define MAX_TOPICS 50
+#define MAX_TOPICS 100
 #define MAX_TOPIC_SIZE 120
 
 // Topics vars
 int gRegisteredTopics = 0;
 char *gTopics[MAX_TOPICS];
 int gTopicsIDs[MAX_TOPICS];
+
+// Keepalive
+int keep_alive = 60;
+int last_keep_alive = getcurrenttime();
+int last_receive = 0;
+
+// Receive timeout = 25s
+int timeout = 25000;
 
 // Reconnection needed?
 int force_reconnect = 0;
@@ -140,23 +149,28 @@ int getTopicID (char *topic) {
 }
 
 // Keepalive function
-int keepalive() {
-
+void pingreq() {
 	char szBuffer[3];
 	char *message;
 	int nCnt;
 	szBuffer[0] = 0x02; // Length
-	szBuffer[1] = MQTTSN_TYPE_PINGREQ; // Ping
+	szBuffer[1] = MQTTSN_TYPE_PINGREQ; // Ping request
+
+	// Send Keepalive message
+	stream_write (pMQTTSNStream, szBuffer, 2);
+	stream_flush (pMQTTSNStream);;
+}
+
+void pingresp() {
+	char szBuffer[3];
+	char *message;
+	int nCnt;
+	szBuffer[0] = 0x02; // Length
+	szBuffer[1] = MQTTSN_TYPE_PINGRESP; // Ping response
 
 	// Send Keepalive message
 	stream_write (pMQTTSNStream, szBuffer, 2);
 	stream_flush (pMQTTSNStream);
-	// Wait for answer
-	message = processReceivedMessage(MQTTSN_TYPE_PINGRESP);
-	// Return error if no response to ping
-	if (message == NULL)
-		return -1;
-	return 1;
 }
 
 // Connect function
@@ -167,6 +181,7 @@ int connect() {
 	int i;
 	int nCnt;
 	i = 1; // Skip first byte (length), we will fill it later
+	int l;
 	// TODO: handle length > 255
 	szBuffer[i++] = MQTTSN_TYPE_CONNECT; // MsgType: Connect
 	szBuffer[i++] = 0x04; // Flags: set CleanSession to true
@@ -311,11 +326,9 @@ int processRegisterMessage(int nCnt, char *_message) {
 	strncpy (topic, &_message[6+l], nCnt-6-l);
 
 	// Check if topic is registered
-	if (!checkRegisteredTopic(topic)) {
-		registerTopic(topicID, topic);
-		sprintf (status, "SUBSCRIBED: %s", topic);
-		setoutputtext(1, status);
-	}
+	registerTopic(topicID, topic);
+	sprintf (status, "SUBSCRIBED: %s", topic);
+	setoutputtext(1, status);
 
 	// Send Regack
 	i = 1;
@@ -336,27 +349,27 @@ int processRegisterMessage(int nCnt, char *_message) {
 
 // Process message received from MQTT-SN gateway
 char * processReceivedMessage(int msgType) {
-	int ct, ct2;
+	int now;
+	int started_waiting = getcurrenttime();
 	int l;
-	int nCnt;
+    int nCnt;
 	char szBufferIn[BUFF_SIZE];
 	char status[300];
 
-	ct = getcurrenttime();
-
-	while (force_reconnect == 0) {
+	while (1) {
 		// Process data received from MQTT-SN gateway (should be Publish messages)
 		// If no data received for 25 seconds, send a keepalive
 		// If keepalive fails, restart connection
 		setoutputtext (2, "");
-		ct2 = getcurrenttime();
-		if (ct2 - ct > 30) {
-			ct = ct2;
-			// Publish heartbeat
-			publish_heartbeat ();
+		now = getcurrenttime();
+		if ((keep_alive) > 0 && (now - last_keep_alive >= keep_alive)) {
+			last_keep_alive = now;
+			pingreq();
 		}
-		nCnt = stream_read(pMQTTSNStream,szBufferIn,BUFF_SIZE,25000);
+
+		nCnt = stream_read(pMQTTSNStream,szBufferIn,BUFF_SIZE,timeout);
 		if (nCnt > 0) {
+			last_receive = getcurrenttime();
 			setoutputtext (1, "");
 			szBufferIn[nCnt] = '\0';
 
@@ -366,7 +379,13 @@ char * processReceivedMessage(int msgType) {
 				l = 2; // length encoded on 3 bytes
 
 			switch (szBufferIn[1+l]) {
+				case MQTTSN_TYPE_CONNACK:
+					break;
+				case MQTTSN_TYPE_PINGREQ:
+					pingresp();
+					break;
 				case MQTTSN_TYPE_PINGRESP:
+					// do nothing
 					break;
 				case MQTTSN_TYPE_PUBLISH:
 					processPublishMessage (nCnt, szBufferIn);
@@ -376,32 +395,33 @@ char * processReceivedMessage(int msgType) {
 				case MQTTSN_TYPE_SUBACK:
 					break;
 				case MQTTSN_TYPE_REGISTER:
+					printf ("Register message: %d %d TopicID: %d", szBufferIn[0+l], szBufferIn[1+l], (szBufferIn[2+l] << 8) + szBufferIn[3+l]);
 					processRegisterMessage (nCnt, szBufferIn);
 					break;
 				case MQTTSN_TYPE_REGACK:
 					break;
 				default:
 					sprintf (status, "Unexpected message: %d %d %d", szBufferIn[0+l], szBufferIn[1+l], szBufferIn[2+l]);
+					printf ("Unexpected message: %d %d %d", szBufferIn[0+l], szBufferIn[1+l], szBufferIn[2+l]);
 					setoutputtext(1, status);
 					break;
 			}
 			// Did we find what we were looking for?
 			if (szBufferIn[1+l] == msgType)
 				return &szBufferIn[0];
-		} else {
-			// Return immediately when no response to ping
-			if (msgType == MQTTSN_TYPE_PINGRESP)
-				return NULL;
-			setoutputtext (2, "KEEPALIVE");
-			if (keepalive() == 1) {
-				// Keep alive ok
-				sleep (10);
-			}
-			else {
-				// Connection dead, reconnect
-				setoutputtext(0,"CONNECTION DEAD");
-				force_reconnect = 1;
-			}
+		}
+
+		now = getcurrenttime();
+
+		if (keep_alive > 0 && (now - last_receive) >= (keep_alive * 1.5)) {
+			setoutputtext(0,"CONNECTION DEAD");
+			force_reconnect = 1;
+			sleep(1000);
+			break;
+		}
+
+		if ((now - started_waiting) >= timeout) {
+			break;
 		}
 	}
 	return NULL;
@@ -480,19 +500,19 @@ while (1) {
 
 	// Connect
 	while (1) {
-        setoutputtext (0, "CONNECTING");
+		setoutputtext (0, "CONNECTING");
 		if (connect() == -1) {
 			setoutputtext(0,"Connection failed");
-			sleep (MQTTSN_GW_CONN_TIMEOUT);
+			sleeps (MQTTSN_GW_CONN_TIMEOUT);
 		}
 		else {
 			setoutputtext(0,"CONNECTED");
 			gRegisteredTopics = 0;
 			// Subscribe topics by sending a pulse on Output 13
 			setoutput (12, 1);
-            sleep (300);
-            setoutput (12, 0);
-            force_reconnect = 0;
+			sleep (300);
+			setoutput (12, 0);
+			force_reconnect = 0;
 			break;
 		}
 	}
@@ -508,9 +528,9 @@ while (1) {
 			break;
 		}
 	}
-	sleep (50);
 
 	while (force_reconnect == 0) {
+		//sleep (50);
 		processReceivedMessage(MQTTSN_TYPE_PUBLISH);
 	}
 }

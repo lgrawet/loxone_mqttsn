@@ -230,14 +230,15 @@ char szBufferIn[BUFF_SIZE];
 while (1) {
 
    while (1) {
+      setoutputtext (0, "CONNECTING");
       if (connect() == -1) {
          setoutputtext(0,"Connection failed");
-         sleep (MQTTSN_GW_CONN_TIMEOUT);
+         sleeps (MQTTSN_GW_CONN_TIMEOUT);
       }
       else {
          setoutputtext(0,"CONNECTED");
          gRegisteredTopics = 0;
-		   sleep (300);
+         sleep (300);
          break;
       }
    }
